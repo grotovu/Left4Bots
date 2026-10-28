@@ -132,6 +132,12 @@
 	// 15 = pistol + magnum + melee + chainsaw
 	// 0 = OFF (Vanilla AI logic)
 	enforce_sniper_rifle = 15
+	
+	// Don't switch to secondary if primary is a rifle. 15 = All secondaries.
+	enforce_rifle = 15
+	
+	// Don't switch to secondary if primary is an SMG. 15 = All secondaries.
+	enforce_smg = 15
 
 	// If the bot's falling (vertical) velocity is > than this, he will be safely teleported to a random teammate. 0 = disabled
 	// Can be set to the value of one of the game's cvars "fall_speed_fatal" (default val. 720), "fall_speed_safe" (560) to avoid insta-death or any damage at all respectively
@@ -270,7 +276,10 @@
 	// 3 = [ERROR], [WARNING] and [INFO]
 	// 4 = [ERROR], [WARNING], [INFO] and [DEBUG]
 	loglevel = 3
-
+	
+	// [1/0] Enable/Disable the vscripted manual attack logic 1 = enabled, 0 = disabled
+	manual_attack_enabled = 0
+	
 	// [1/0] Enable/Disable the vscripted manual attack while not executing any MOVE command. 0 = Manual attack only while executing MOVE commands, 1 = Always
 	manual_attack_always = 0
 
@@ -494,6 +503,37 @@
 
 	// [1/0] Enable/Disable the smart use command for destroyable barricades. "use" order on the barricade gascans will automatically convert to the "destroy" order
 	smart_use_destroy = 1
+	
+	// Distance the bot will stay behind the target in snake formation
+	snake_formation_distance = 50
+
+	// Distance before the bot is forced to teleport to the snake formation position
+	snake_formation_teleport_distance = 100
+	
+	// Side and Back offsets for Pace Slot 1 (Front Right)
+	pace_slot1_side = 50
+	pace_slot1_back = -120
+
+	// Side and Back offsets for Pace Slot 2 (Behind Left)
+	pace_slot2_side = -60
+	pace_slot2_back = -20
+
+	// Side and Back offsets for Pace Slot 3 (Front Left)
+	pace_slot3_side = -50
+	pace_slot3_back = -100
+
+	// Side and Back offsets for Pace Slot 4 (Behind Right)
+	pace_slot4_side = 50
+	pace_slot4_back = -20
+	
+	// Minimum and Maximum scale for drift (0.0 to 1.0)
+	// 0.2 means the bot will stay at least 20% away from the leader.
+	pace_drift_min_scale = 0.2
+	pace_drift_max_scale = 1.0
+
+	// Frequency range (in seconds) for how often the bot picks a new drift spot
+	pace_drift_min_time = 3.0
+	pace_drift_max_time = 6.0
 
 	// [1/0] Enable/Disable the smart use command for scavenge items. "use" order on a scavenge item (gascans, cola while a pouring target is active) will automatically convert to the "scavenge" order
 	smart_use_scavenge = 1

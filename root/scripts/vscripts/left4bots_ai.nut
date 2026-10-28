@@ -97,6 +97,14 @@ enum AI_AIM_TYPE {
 	scope.SM_MoveTime <- 0;
 	scope.CarryItem <- null;
 	scope.CarryItemWeaponId <- 0;
+	scope.CarryAlwaysModel <- "";
+	scope.LastThreatTime <- 0;
+	scope.PaceWithMeTarget <- null;
+	scope.SquadIndex <- 0;
+	scope.PaceFactorSide <- 1.0; // 0.0 to 1.0 multiplier
+	scope.PaceFactorBack <- 1.0; // 0.0 to 1.0 multiplier
+	scope.PaceNextDriftTime <- 0; // When to change the multipliers
+	scope.SnakeTrail <- [];
 	scope.HurryUntil <- 0;
 	scope.UseWeapons <- {};
 
@@ -332,11 +340,28 @@ enum AI_AIM_TYPE {
 			order.DestRadius <- Settings.move_end_radius_scavenge;
 			order.MaxSeparation <- 0;
 			break;
-		}
+		}		
 		case "carry":
 		{
 			local wId = Left4Utils.GetWeaponId(destEnt);
-			if (Left4Utils.GetWeaponSlotById(wId) != 5)
+			local isValidCarry = (Left4Utils.GetWeaponSlotById(wId) == 5);
+
+			// Wildcard fallback for special mutations
+			if (!isValidCarry && destEnt && destEnt.IsValid()) {
+				local mdl = destEnt.GetModelName();
+				if (mdl) {
+					mdl = mdl.tolower();
+					if (mdl.find("gnome.mdl") != null) { wId = 27; isValidCarry = true; }
+					else if (mdl.find("cola.mdl") != null) { wId = 28; isValidCarry = true; }
+					else if (mdl.find("gascan001a.mdl") != null) { wId = 16; isValidCarry = true; }
+					else if (mdl.find("propane_tank.mdl") != null || mdl.find("oxygentank01.mdl") != null || mdl.find("fireworks_crate.mdl") != null) {
+						wId = 27; 
+						isValidCarry = true;
+					}
+				}
+			}
+
+			if (!isValidCarry)
 				return null; // Not a carriable item
 
 			if (from)
@@ -359,6 +384,18 @@ enum AI_AIM_TYPE {
 		case "follow":
 		{
 			order.DestRadius <- Settings.move_end_radius_follow;
+			order.MaxSeparation <- 0;
+			break;
+		}		
+		case "snake_in":
+		{
+			order.DestRadius <- 15;
+			order.MaxSeparation <- 0;
+			break;
+		}
+		case "pace_with_me":
+		{
+			order.DestRadius <- 15;
 			order.MaxSeparation <- 0;
 			break;
 		}
@@ -908,6 +945,11 @@ enum AI_AIM_TYPE {
 
 	// handle switch logic
 	L4B.EnforcePrimaryWeapon(self, ActiveWeapon);
+	
+	// Update threat timer for carry_always using tangible threats, ignoring the buggy visible threats flag
+	if (self.IsFiringWeapon()) {
+		LastThreatTime = CurTime;
+	}
 
 	// Basically, all this CarryItem stuff is because some carriable items despawn as prop_physics and respawn as weapon_* and viceversa when picking/dropping them
 	// and also because the game's "dropped" event does not trigger every time
@@ -1628,7 +1670,6 @@ enum AI_AIM_TYPE {
 	}
 }
 
-// Handles the bot's orders execution logic
 ::Left4Bots.AIFuncs.BotThink_Orders <- function ()
 {
 	if (MoveType > AI_MOVE_TYPE.Order)
@@ -1637,7 +1678,6 @@ enum AI_AIM_TYPE {
 	if (!CurrentOrder && Orders.len() > 0)
 	{
 		CurrentOrder = Orders.remove(0); // Get the next order to execute and remove it from the FIFO queue
-		
 		L4B.Logger.Debug("[AI]" + self.GetPlayerName() + " - New CurrentOrder: " + L4B.BotOrderToString(CurrentOrder));
 	}
 	
@@ -1655,19 +1695,15 @@ enum AI_AIM_TYPE {
 	{
 		// Order's DestEnt is no longer valid or it was picked up by someone. Cancel this order
 		L4B.Logger.Debug("[AI]" + self.GetPlayerName() + " - CurrentOrder's DestEnt is no longer valid: " + L4B.BotOrderToString(CurrentOrder));
-		
 		BotCancelCurrentOrder();
-
 		return;
 	}
 	
 	// Execute CurrentOrder
-	
 	if (CurrentOrder.OrderType == "follow")
 	{
 		if (CurrentOrder.DestEnt.IsDead())
 		{
-			// no sense in "following" dead player, cancel order
 			BotCancelCurrentOrder();
 			return;
 		}
@@ -1681,20 +1717,176 @@ enum AI_AIM_TYPE {
 			return;
 	}
 	
-	// BotIsInPause can call BotFinalizeCurrentOrder, so CurrentOrder can also be null here. Let's check it again...
-	if (!CurrentOrder)
+	if (!CurrentOrder) return;
+	
+	// --- SNAKE FORMATION ---
+	// --- SMOOTH SQUAD SNAKE (LAG COMPENSATION VERSION) ---
+	if (CurrentOrder.OrderType == "snake_in")
+	{
+		local myTarget = L4B.GetSnakeTarget(self);
+		
+		// 1. PERMANENT STOP
+		if (!myTarget || !myTarget.IsValid() || myTarget.IsDead()) {
+			BotCancelCurrentOrder(); return;
+		}
+		// 2. TEMPORARY PAUSE (Leader down or Tank near)
+		if (myTarget.IsIncapacitated() || Paused != 0) {
+			NetProps.SetPropInt(self, "m_afButtonForced", NetProps.GetPropInt(self, "m_afButtonForced") & ~131072);
+			if (MovePos) BotMoveReset();
+			return; // Go save the leader!
+		}
+
+		local targetScope = myTarget.GetScriptScope();
+		if (!("SnakeTrail" in targetScope)) { BotMoveTo(myTarget.GetOrigin()); return; }
+		
+		local trail = targetScope.SnakeTrail;
+		local trailIndex = 3; 
+		
+		if (trail.len() > trailIndex)
+		{
+			local targetPos = trail[trailIndex];
+			CurrentOrder.DestPos = targetPos;
+
+			local distToSpot = (Origin - targetPos).Length2D();
+			local leaderVel = myTarget.GetVelocity();
+			local leaderSpeed = leaderVel.Length2D();
+			local BUTTON_WALK = 131072;
+
+			// 1. DYNAMIC TELEPORT: 
+			// If running, we allow a bigger gap (180) to account for engine lag.
+			// If walking/standing, we keep it tight (80).
+			local maxLeash = (leaderSpeed > 165) ? 180 : 80;
+			if (distToSpot > maxLeash) {
+				self.SetOrigin(targetPos);
+				BotMoveReset();
+				return;
+			}
+
+			// 2. VELOCITY INJECTION (The "Lag Fix"):
+			// If we are following a moving leader, match their velocity 
+			// every frame so we don't slow down between navigation updates.
+			if (leaderSpeed > 10) {
+				self.SetVelocity(leaderVel);
+			}
+
+			// 3. BRAIN LOGIC:
+			if (leaderSpeed < 10 && distToSpot < 15) {
+				if (MovePos) BotMoveReset();
+				NetProps.SetPropInt(self, "m_afButtonForced", NetProps.GetPropInt(self, "m_afButtonForced") & ~BUTTON_WALK);
+			} 
+			else {
+				// Elastic Pacing: Run if gap > 30, Walk if close.
+				if (distToSpot > 30 || leaderSpeed > 165) {
+					NetProps.SetPropInt(self, "m_afButtonForced", NetProps.GetPropInt(self, "m_afButtonForced") & ~BUTTON_WALK);
+				} else {
+					NetProps.SetPropInt(self, "m_afButtonForced", NetProps.GetPropInt(self, "m_afButtonForced") | BUTTON_WALK);
+				}
+				
+				// Standard Nav update (Keep at 10+ to avoid stutter)
+				if (!MovePos || (MovePos - targetPos).Length() > 10) BotMoveTo(targetPos);
+			}
+		}
 		return;
+	}
+	// --------------------------------------------
+	
+	// --- PACE WITH ME (NATIVE CHASE VS. FORMATION) ---
+	if (CurrentOrder.OrderType == "pace_with_me")
+	{
+		local myTarget = PaceWithMeTarget; 
+		
+		// 1. PERMANENT STOP: If leader is gone or dead, kill the memory.
+		if (!myTarget || !myTarget.IsValid() || myTarget.IsDead()) {
+			BotCancelCurrentOrder(); PaceWithMeTarget = null;
+			NetProps.SetPropInt(self, "m_afButtonForced", NetProps.GetPropInt(self, "m_afButtonForced") & ~131072);
+			return;
+		}
+
+		// 2. TEMPORARY PAUSE: If Tank is near OR Leader is Incapped OR Bot is busy
+		if (Paused != 0 || BotIsInPause(true, false, false, 0) || myTarget.IsIncapacitated()) {
+			NetProps.SetPropInt(self, "m_afButtonForced", NetProps.GetPropInt(self, "m_afButtonForced") & ~131072);
+			if (MovePos && (Paused != 0 || myTarget.IsIncapacitated())) BotMoveReset(); 
+			return; // Let native AI handle fighting or reviving you!
+		}
+
+		local myIndex = self.GetScriptScope().SquadIndex;
+		local targetSpeed = myTarget.GetVelocity().Length2D();
+		local BUTTON_WALK = 131072; 
+		local targetPos = myTarget.GetOrigin(); 
+
+		// 2. DETERMINE MODE BASED ON SPEED
+		if (targetSpeed > 160) 
+		{
+			// --- NATIVE CHASE MODE (Running) ---
+			// Release the walk key and CLEAR our custom movement command.
+			// This forces the bot to use its native L4D2 'Follow Human' code.
+			NetProps.SetPropInt(self, "m_afButtonForced", NetProps.GetPropInt(self, "m_afButtonForced") & ~BUTTON_WALK);
+			
+			if (MovePos) {
+				BotMoveReset(); // Kills the custom destination so native AI takes over
+			}
+			
+			// We return here so NO custom pathing math runs while you are running.
+			return; 
+		}
+		else if (targetSpeed < 10) 
+		{
+			// --- HALT MODE (Stopped) ---
+			NetProps.SetPropInt(self, "m_afButtonForced", NetProps.GetPropInt(self, "m_afButtonForced") & ~BUTTON_WALK);
+			if (MovePos) BotMoveReset(); 
+			return; 
+		}
+		else 
+		{
+			// --- FORMATION MODE (Walking + Dynamic Drift) ---
+			local s = L4B.Settings;
+			
+			// Drift calculation
+			if (CurTime > PaceNextDriftTime) {
+				PaceFactorSide = RandomFloat(s.pace_drift_min_scale, s.pace_drift_max_scale);
+				PaceFactorBack = RandomFloat(s.pace_drift_min_scale, s.pace_drift_max_scale);
+				PaceNextDriftTime = CurTime + RandomFloat(s.pace_drift_min_time, s.pace_drift_max_time);
+			}
+
+			local fwd = myTarget.GetVelocity();
+			fwd.z = 0; fwd.Norm();
+			local right = Vector(fwd.y, -fwd.x, 0); 
+
+			local sideMax = 0; local backMax = 0;
+
+			if (myIndex == 1)      { sideMax = s.pace_slot1_side; backMax = s.pace_slot1_back; }
+			else if (myIndex == 2) { sideMax = s.pace_slot2_side; backMax = s.pace_slot2_back; }
+			else if (myIndex == 3) { sideMax = s.pace_slot3_side; backMax = s.pace_slot3_back; }
+			else if (myIndex == 4) { sideMax = s.pace_slot4_side; backMax = s.pace_slot4_back; }
+			else                   { sideMax = 30;                backMax = 80; }
+
+			local sideOffset = sideMax * PaceFactorSide;
+			local backOffset = backMax * PaceFactorBack;
+
+			targetPos = myTarget.GetOrigin() - (fwd * backOffset) + (right * sideOffset);
+			local distToSpot = (Origin - targetPos).Length2D();
+
+			// Mirror walk speed
+			if (distToSpot < 100)
+				NetProps.SetPropInt(self, "m_afButtonForced", NetProps.GetPropInt(self, "m_afButtonForced") | BUTTON_WALK);
+			else
+				NetProps.SetPropInt(self, "m_afButtonForced", NetProps.GetPropInt(self, "m_afButtonForced") & ~BUTTON_WALK);
+
+			if (!MovePos || (MovePos - targetPos).Length() > 25) {
+				BotMoveTo(targetPos); 
+			}
+		}
+		
+		CurrentOrder.DestPos = targetPos; 
+	}
+	//---------------------------------------------
 	
 	if (!MovePos || MoveType != AI_MOVE_TYPE.Order)
 	{
-		// We also get here when we were already executing the order but an higher priority MOVE took over and now it's finished
 		BotInitializeCurrentOrder();
 	}
 	else
 	{
-		// Already moving for the current order
-		
-		// Lets see if we reached the order's destination...
 		local destPos = CurrentOrder.DestPos;
 		if (!destPos && CurrentOrder.DestEnt)
 			destPos = CurrentOrder.DestEnt.GetOrigin();
@@ -1703,14 +1895,10 @@ enum AI_AIM_TYPE {
 
 		if ((Origin - destPos).Length() <= CurrentOrder.DestRadius || L4B.IsBotReachOrderPosition(self, CurrentOrder))
 		{
-			// Yes, we did
-			// BotReset(); // No longer needed if we set sb_debug_apoproach_wait_time to something like 0.5 or even 0
-			
 			BotFinalizeCurrentOrder();
 		}
 		else
 		{
-			// Not yet. Keep moving...
 			if (destPos)
 			{
 				if (L4B.Settings.moveto_nav && (CurrentOrder.OrderType == "scavenge" || CurrentOrder.OrderType == "carry"))
@@ -1820,10 +2008,66 @@ enum AI_AIM_TYPE {
 	}
 }
 
+::Left4Bots.FindCarryAlwaysItem <- function(keyword, origin)
+{
+	local bestEnt = null;
+	local minDist = 999999;
+	
+	// Correctly list all possible physics and weapon classes without using the unsupported '*' wildcard
+	local classes = [
+		"prop_physics", 
+		"prop_physics_multiplayer", 
+		"prop_physics_override", 
+		"weapon_gnome", 
+		"weapon_cola_bottles", 
+		"weapon_gascan",
+		"weapon_fireworkcrate",
+		"weapon_propanetank",
+		"weapon_oxygentank"
+	];
+	
+	foreach(cls in classes) {
+		local ent = null;
+		while ((ent = Entities.FindByClassname(ent, cls)) != null) {
+			local mdl = ent.GetModelName();
+			if (mdl && mdl.tolower().find(keyword) != null) {
+				if (ent.IsValid() && ent.GetMoveParent() == null && !::Left4Bots.BotsHaveOrderDestEnt(ent)) {
+					local dist = (ent.GetOrigin() - origin).Length();
+					if (dist < minDist) {
+						minDist = dist;
+						bestEnt = ent;
+					}
+				}
+			}
+		}
+	}
+	return bestEnt;
+}
+
 // Handles other bot's logics
 ::Left4Bots.AIFuncs.BotThink_Misc <- function ()
 {
-	if (!L4B.FinalVehicleArrived && L4B.Settings.tank_retreat_radius > 0)
+	// --- PACE WITH ME MEMORY RECOVERY ---
+	if (PaceWithMeTarget != null)
+	{
+		// Leader is permanently gone
+		if (!PaceWithMeTarget.IsValid() || PaceWithMeTarget.IsDead())
+		{
+			PaceWithMeTarget = null;
+			NetProps.SetPropInt(self, "m_afButtonForced", NetProps.GetPropInt(self, "m_afButtonForced") & ~131072);
+		}
+		// Restore order ONLY if leader is standing and no tanks are around
+		else if (!L4B.BotHasOrderOfType(self, "pace_with_me"))
+		{
+			if (MoveType != 2 && MoveType != 3 && !L4B.HasTanksWithin(Origin, 800) && !PaceWithMeTarget.IsIncapacitated()) 
+			{
+				L4B.Logger.Debug("[AI]" + self.GetPlayerName() + " - Restoring Pace Order");
+				L4B.BotOrderAdd(self, "pace_with_me", null, null, null, null, 0.0, true);
+			}
+		}
+	}
+	
+	if (!L4B.FinalVehicleArrived && L4B.Settings.tank_retreat_radius > 0 && !L4B.BotHasOrderOfType(self, "snake_in"))
 	{
 		//local nearestTank = L4B.GetNearestAggroedTankWithin(Origin, 0, L4B.Settings.tank_retreat_radius);
 		local nearestTank = L4B.GetNearestAggroedVisibleTankWithin(self, Origin, 0, L4B.Settings.tank_retreat_radius);
@@ -1840,10 +2084,36 @@ enum AI_AIM_TYPE {
 	}
 	
 	//lxc Move from BotThink_Main to here, almost no difference about kill infected, and it can also save performance
-	BotManualAttack();
+	if (L4B.Settings.manual_attack_enabled)
+	{
+		BotManualAttack();
+	}
 	
 	//lxc lock func
 	BotLockShoot();
+	
+	// --- NEW CARRY ALWAYS RECOVERY LOGIC ---
+	if (CarryAlwaysModel != "" && ActiveWeaponSlot != 5) 
+	{
+		local safe_time = ("carry_always_safe_time" in L4B.Settings) ? L4B.Settings.carry_always_safe_time : 1.0;
+		
+		if ((CurTime - LastThreatTime) >= safe_time) 
+		{
+			if (!L4B.BotHasOrderOfType(self, "carry")) 
+			{
+				// Use our new Wildcard search function!
+				local newDestEnt = L4B.FindCarryAlwaysItem(CarryAlwaysModel, Origin);
+				
+				if (newDestEnt) {
+					L4B.Logger.Debug("[AI]" + self.GetPlayerName() + " - Safe! Found matching model. Re-issuing carry order for " + newDestEnt);
+					L4B.BotOrderAdd(self, "carry", null, newDestEnt);
+				}
+			}
+		}
+	}
+	if (Paused != 0) {
+		NetProps.SetPropInt(self, "m_afButtonForced", NetProps.GetPropInt(self, "m_afButtonForced") & ~131072);
+	}
 }
 
 // Handles the bot's enemy melee/shove/shoot logics
@@ -1892,6 +2162,7 @@ enum AI_AIM_TYPE {
 		BotSetAim(AI_AIM_TYPE.Shove, L4B.GetHitPos(target), 0.3);
 		L4B.PlayerPressButton(self, BUTTON_SHOVE);
 	}												// depending on manual_attack_mindot, the desired FOV might be larger than the m_hasVisibleThreats FOV, so this condition has to be removed (thx MutinCholer)
+	
 	else if (((MovePos && Paused == 0) || L4B.Settings.manual_attack_always) /*&& NetProps.GetPropInt(self, "m_hasVisibleThreats")*/) // m_hasVisibleThreats indicates that a threat is in the bot's current field of view. An infected behind the bot won't set this
 	{
 		// If no close target or we cannot melee or shove it at the moment, then handle manual shooting to targets in our field of view
@@ -1926,6 +2197,8 @@ enum AI_AIM_TYPE {
 // It tries to detect the stuck status of the bot before the C++ does. The bot's AI will use this to try to reset the MOVE and start a Pause before the bot gets teleported
 ::Left4Bots.AIFuncs.BotStuckMonitor <- function ()
 {
+	if (L4B.BotHasOrderOfType(self, "snake_in")) return false;
+	
 	if ((NetProps.GetPropInt(self, "m_nButtons") & (BUTTON_FORWARD + BUTTON_BACK + BUTTON_MOVELEFT + BUTTON_MOVERIGHT)) != 0)
 	{
 		// Bot is trying to move
@@ -2028,7 +2301,13 @@ enum AI_AIM_TYPE {
 	MovePosReal = MovePos;
 	
 	//lxc don't send move command in short time
-	NextMoveTime = CurTime + 0.5;
+	//NextMoveTime = CurTime + 0.5;
+	// If the bot is in a conga line, allow it to think much faster (0.1s)
+	// Otherwise, keep the standard 0.5s to prevent game-wide stuttering.
+	local moveDelay = 0.5;
+	if (L4B.BotHasOrderOfType(self, "snake_in")) moveDelay = 0.01;
+	NextMoveTime = CurTime + moveDelay;
+	
 
 	if (L4B.Settings.moveto_debug_duration > 0)
 		DebugDrawCircle(MovePosReal, Vector(255, 0, 0), 255, 6, true, L4B.Settings.moveto_debug_duration);
@@ -2100,7 +2379,13 @@ enum AI_AIM_TYPE {
 	}
 	
 	//lxc don't send move command in short time
-	NextMoveTime = CurTime + 0.5;
+	//NextMoveTime = CurTime + 0.5;
+	// If the bot is in a conga line, allow it to think much faster (0.1s)
+	// Otherwise, keep the standard 0.5s to prevent game-wide stuttering.
+	local moveDelay = 0.5;
+	if (L4B.BotHasOrderOfType(self, "snake_in")) moveDelay = 0.01;
+	NextMoveTime = CurTime + moveDelay;
+	
 	
 	if (L4B.Settings.moveto_debug_duration > 0)
 		DebugDrawCircle(MovePosReal, Vector(255, 0, 0), 255, 6, true, L4B.Settings.moveto_debug_duration);
@@ -3071,18 +3356,19 @@ enum AI_AIM_TYPE {
 
 			break;
 		}
+		
 		case "carry":
 		{
 			L4B.Logger.Info("[AI]" + self.GetPlayerName() + " is carrying " + CurrentOrder.DestEnt);
-
+	
 			//lxc switch to new method
 			L4B.PickupFailsafe(self, CurrentOrder.DestEnt);
 			//Left4Timers.AddTimer(null, L4B.Settings.pickups_failsafe_delay, @(params) ::Left4Bots.PickupFailsafe.bindenv(::Left4Bots)(params.bot, params.item), { bot = self, item = CurrentOrder.DestEnt });
 			L4B.PlayerPressButton(self, BUTTON_USE,  CurrentOrder.HoldTime, CurrentOrder.DestEnt.GetCenter(), 0, 0, true);
-
+	
 			// Do not complete the order if we need to carry this item
 			orderComplete = !CurrentOrder.Param1 || Left4Utils.GetWeaponSlotById(CurrentOrder.Param1) != 5;
-
+	
 			break;
 		}
 		case "scavenge":
@@ -3231,6 +3517,17 @@ enum AI_AIM_TYPE {
 
 			break;
 		}
+		case "snake_in":
+		{
+			// Never finish the order, just hold the position until canceled
+			orderComplete = false;
+			break;
+		}
+		case "pace_with_me":
+		{
+			orderComplete = false;
+			break;
+		}
 		case "wait":
 		{
 			// https://github.com/smilz0/Left4Bots/issues/2
@@ -3350,6 +3647,14 @@ enum AI_AIM_TYPE {
 		L4B.CarryItemStop(self);
 		L4B.DropCarryItem(self);
 	}
+	if (CurrentOrder.OrderType == "snake_in")
+	{
+		L4B.RemoveFromSnakeFormation(self);
+	}
+	if (CurrentOrder.OrderType == "pace_with_me")
+	{
+		L4B.RemoveFromSnakeFormation(self);
+	}
 
 	CurrentOrder = null;
 }
@@ -3447,6 +3752,8 @@ enum AI_AIM_TYPE {
 	DoorEnt = null;
 	DoorZ = 0;
 	DoorAct = AI_DOOR_ACTION.None;
+	
+	//CarryAlwaysModel = "";
 
 	// Just in case...
 	NetProps.SetPropInt(self, "m_fFlags", NetProps.GetPropInt(self, "m_fFlags") & ~(1 << 5)); // unset FL_FROZEN
@@ -3522,6 +3829,9 @@ enum AI_AIM_TYPE {
 // Called when the bot starts the pause
 ::Left4Bots.AIFuncs.BotOnPause <- function (reason = true)
 {
+	// Ensure the bot releases the Walk key for any threat pause
+	NetProps.SetPropInt(self, "m_afButtonForced", NetProps.GetPropInt(self, "m_afButtonForced") & ~131072);
+	
 	if (MovePos)
 		BotReset();
 

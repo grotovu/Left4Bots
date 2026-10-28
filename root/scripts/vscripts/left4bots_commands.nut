@@ -12,9 +12,11 @@ Msg("Including left4bots_commands...\n");
 ];
 
 ::Left4Bots.UserCommands <- [
-	"automation"
+	"automation",
 	"cancel",
 	"carry",
+	"carry_always",
+	"checkmemory",
 	"come",
 	"deploy",
 	"destroy",
@@ -26,7 +28,11 @@ Msg("Including left4bots_commands...\n");
 	"lead",
 	"lock",
 	"move",
+	"pace_stop",
+	"pace_with_me",
 	"scavenge",
+	"snake_in",
+	"snake_out",
 	"swap",
 	"tempheal",
 	"throw",
@@ -132,6 +138,53 @@ Msg("Including left4bots_commands...\n");
 		 + PRINTCOLOR_ORANGE + "NOTE:" + PRINTCOLOR_NORMAL + " only the admins can use this command.";
 }
 
+::Left4Bots.GetSnakeTarget <- function(bot)
+{
+	foreach (leaderId, train in ::Left4Bots.SnakeTrains)
+	{
+		local idx = train.find(bot);
+		if (idx != null)
+		{
+			// If first bot in train, follow human. Otherwise, follow bot ahead of it.
+			if (idx == 0) 
+			{
+				local leader = null;
+				foreach (surv in ::Left4Bots.Survivors) {
+					if (surv.GetPlayerUserId() == leaderId) leader = surv;
+				}
+				return leader;
+			}
+			else return train[idx - 1]; 
+		}
+	}
+	return null;
+}
+
+::Left4Bots.RemoveFromSnakeFormation <- function(bot)
+{
+	foreach (leaderId, train in ::Left4Bots.SnakeTrains)
+	{
+		local idx = train.find(bot);
+		if (idx != null)
+		{
+			train.remove(idx);
+			if (train.len() == 0) delete ::Left4Bots.SnakeTrains[leaderId];
+			::Left4Bots.Logger.Debug("Removed " + bot.GetPlayerName() + " from Snake Formation. Train size: " + train.len());
+			return;
+		}
+	}
+	foreach (leaderId, train in ::Left4Bots.PaceTrains)
+	{
+		local idx = train.find(bot);
+		if (idx != null)
+		{
+			train.remove(idx);
+			if (train.len() == 0) delete ::Left4Bots.PaceTrains[leaderId];
+			return;
+		}
+	}
+}
+
 // -- User commands --------------------------
 
 ::Left4Bots.Cmd_automation <- function (player, allBots = false, tgtBot = null, param = null)
@@ -212,7 +265,15 @@ Msg("Including left4bots_commands...\n");
 		foreach (bot in Bots)
 		{
 			if (!param || param == "all")
+			{
+				//bot.GetScriptScope().CarryAlwaysModel = "";
 				bot.GetScriptScope().BotCancelAll();
+			}
+			else if (param == "carry_always") // <--- ADD THIS BLOCK
+			{         
+				bot.GetScriptScope().CarryAlwaysModel = "";
+				bot.GetScriptScope().BotCancelOrders("carry");
+			}
 			else if (param == "current")
 				bot.GetScriptScope().BotCancelCurrentOrder();
 			else if (param == "orders")
@@ -230,7 +291,15 @@ Msg("Including left4bots_commands...\n");
 	else
 	{
 		if (!param || param == "all")
+		{
+			//tgtBot.GetScriptScope().CarryAlwaysModel = "";
 			tgtBot.GetScriptScope().BotCancelAll();
+		}
+		else if (param == "carry_always") // <--- ADD THIS BLOCK
+			{         
+				tgtBot.GetScriptScope().CarryAlwaysModel = "";
+				tgtBot.GetScriptScope().BotCancelOrders("carry");
+			}
 		else if (param == "current")
 			tgtBot.GetScriptScope().BotCancelCurrentOrder();
 		else if (param == "orders")
@@ -283,9 +352,171 @@ Msg("Including left4bots_commands...\n");
 		tgtBot = GetFirstAvailableBotForOrder("carry", null, target.GetCenter());
 
 	if (tgtBot)
-		BotOrderAdd(tgtBot, "carry", player, target);
+	{
+		tgtBot.GetScriptScope().CarryAlwaysModel = ""; // <--- ADD THIS LINE
+		BotOrderAdd(tgtBot, "carry", player, target);		
+	}
+		
 	else
 		Logger.Warning("No available bot for order of type: carry");
+}
+
+::Left4Bots.Cmd_carry_always <- function (player, allBots = false, tgtBot = null, param = null)
+{
+	// --- BEHAVIOR 1: Parameter Provided (e.g. carry_always gnome) ---
+	if (param)
+	{
+		param = param.tolower();
+		if (!(param in ::Left4Bots.CarryableItemMap))
+		{
+			ClientPrint(player, 3, "\x04[L4B]\x01 Invalid item type: \x03" + param);
+			local validItems = "";
+			foreach(key, val in ::Left4Bots.CarryableItemMap) validItems += key + ", ";
+			ClientPrint(player, 3, "\x04[L4B]\x01 Valid types: \x03" + validItems.slice(0, -2));
+			return;
+		}
+
+		local modelToCarry = ::Left4Bots.CarryableItemMap[param];
+		local initialTarget = ::Left4Bots.FindCarryAlwaysItem(modelToCarry, player.GetOrigin());
+
+		if (!initialTarget)
+		{
+			ClientPrint(player, 3, "\x04[L4B]\x01 No available '\x03" + param + "\x01' items found on the map.");
+			return;
+		}
+
+		if (!tgtBot || allBots)
+			tgtBot = GetFirstAvailableBotForOrder("carry", null, initialTarget.GetCenter());
+
+		if (tgtBot)
+		{
+			tgtBot.GetScriptScope().CarryAlwaysModel = modelToCarry; 
+			BotOrderAdd(tgtBot, "carry", player, initialTarget);
+			ClientPrint(player, 3, "\x04[L4B]\x01 " + tgtBot.GetPlayerName() + " is now assigned to carry \x03" + param + "\x01s.");
+		}
+		return;
+	}
+
+	// --- BEHAVIOR 2: Point & Look ---
+	local tTable = ::Left4Utils.GetLookingTargetEx(player, TRACE_MASK_NPC_SOLID);
+	if (!tTable) return;
+
+	local target = null;
+	
+	// Helper function to validate if an entity is our wildcard item
+	local function IsValidTarget(ent) {
+		if (!ent || !ent.IsValid()) return false;
+		if (::Left4Utils.GetWeaponSlotById(::Left4Utils.GetWeaponId(ent)) == 5) return true;
+		local mdl = ent.GetModelName();
+		if (mdl) {
+			mdl = mdl.tolower();
+			foreach(key, val in ::Left4Bots.CarryableItemMap) {
+				if (mdl.find(val) != null) return true;
+			}
+		}
+		return false;
+	}
+
+	// 1. Try checking exactly what the laser hit
+	if (IsValidTarget(tTable["ent"])) {
+		target = tTable["ent"];
+	}
+	// 2. If the laser hit the floor/wall, search a 130-unit bubble around that spot!
+	else {
+		local searchEnt = null;
+		local minDist = 130;
+		while ((searchEnt = Entities.FindInSphere(searchEnt, tTable["pos"], 130)) != null) {
+			if (IsValidTarget(searchEnt) && searchEnt.GetMoveParent() == null && !::Left4Bots.BotsHaveOrderDestEnt(searchEnt)) {
+				local dist = (searchEnt.GetOrigin() - tTable["pos"]).Length();
+				if (dist < minDist) {
+					minDist = dist;
+					target = searchEnt;
+				}
+			}
+		}
+	}
+
+	if (!target)
+	{
+		ClientPrint(player, 3, "\x04[L4B]\x01 You are not looking at a valid carriable item.");
+		ClientPrint(player, 3, "\x04[L4B]\x01 Alternatively, specify an item type: \x03!l4b <bot> carry_always <item>");
+		return;
+	}
+
+	// We found it! Save it to memory.
+	local modelToCarry = target.GetModelName().tolower();
+
+	if (!tgtBot || allBots)
+		tgtBot = GetFirstAvailableBotForOrder("carry", null, target.GetCenter());
+
+	if (tgtBot)
+	{
+		tgtBot.GetScriptScope().CarryAlwaysModel = modelToCarry; 
+		BotOrderAdd(tgtBot, "carry", player, target);
+		ClientPrint(player, 3, "\x04[L4B]\x01 " + tgtBot.GetPlayerName() + " is now assigned to carry this item.");
+	}
+	else
+	{
+		ClientPrint(player, 3, "\x04[L4B]\x01 No available bot for carry_always order.");
+	}
+}
+
+::Left4Bots.CmdHelp_carry_always <- function ()
+{
+	return PRINTCOLOR_NORMAL + "<" + PRINTCOLOR_CYAN + "botsource" + PRINTCOLOR_NORMAL + "> " + PRINTCOLOR_GREEN + "carry_always [<item_type>]" + PRINTCOLOR_NORMAL + "\n"
+		 + PRINTCOLOR_NORMAL + "Assigns a bot to permanently carry an item. Has two modes:\n"
+		 + PRINTCOLOR_NORMAL + "1. With <item_type>: Assigns bot to carry any item of that type on the map.\n"
+		 + PRINTCOLOR_NORMAL + "   Example: '" + PRINTCOLOR_CYAN + "l4b ellis carry_always gnome" + PRINTCOLOR_NORMAL + "'\n"
+		 + PRINTCOLOR_NORMAL + "2. Without <item_type>: Assigns bot to carry the specific item you are looking at.\n";
+}
+
+::Left4Bots.Cmd_checkmemory <- function (player, allBots = false, tgtBot = null, param = null)
+{
+	local function PrintMemory(bot)
+	{
+		if (!bot || !bot.IsValid()) return;
+		
+		local botName = bot.GetPlayerName();
+		local model = bot.GetScriptScope().CarryAlwaysModel;
+
+		if (model == "")
+		{
+			ClientPrint(player, 3, PRINTCOLOR_NORMAL + botName + "'s memory is empty.");
+		}
+		else
+		{
+			ClientPrint(player, 3, PRINTCOLOR_NORMAL + botName + "'s memory is: " + PRINTCOLOR_GREEN + model);
+		}
+	}
+
+	if (allBots)
+	{
+		foreach (bot in Bots)
+		{
+			PrintMemory(bot);
+		}
+	}
+	else
+	{
+		if (!tgtBot)
+		{
+			tgtBot = GetPickerBot(player);
+			if (!tgtBot)
+			{
+				ClientPrint(player, 3, PRINTCOLOR_ORANGE + "You are not looking at a bot.");
+				return;
+			}
+		}
+		PrintMemory(tgtBot);
+	}
+}
+
+::Left4Bots.CmdHelp_checkmemory <- function ()
+{
+	return PRINTCOLOR_NORMAL + "<" + PRINTCOLOR_CYAN + "botsource" + PRINTCOLOR_NORMAL + "> " + PRINTCOLOR_GREEN + "checkmemory" + PRINTCOLOR_NORMAL + "\n"
+		 + PRINTCOLOR_NORMAL + "The order is executed immediately.\n"
+		 + PRINTCOLOR_NORMAL + "Displays the current value of the bot(s) CarryAlwaysModel memory variable.\n"
+		 + PRINTCOLOR_NORMAL + "Useful for debugging the carry_always feature.";
 }
 
 ::Left4Bots.CmdHelp_carry <- function ()
@@ -293,6 +524,84 @@ Msg("Including left4bots_commands...\n");
 	return PRINTCOLOR_NORMAL + "<" + PRINTCOLOR_CYAN + "botsource" + PRINTCOLOR_NORMAL + "> " + PRINTCOLOR_GREEN + "carry" + PRINTCOLOR_NORMAL + "\n"
 		 + PRINTCOLOR_NORMAL + "The order is added to the given bot(s) orders queue.\n"
 		 + PRINTCOLOR_NORMAL + "The bot(s) will pick and hold the carriable item (gnome, gascan, cola, etc.) you are looking at.";
+}
+
+::Left4Bots.Cmd_snake_in <- function (player, allBots = false, tgtBot = null, param = null)
+{
+	// 1. Determine the Leader (The Engine)
+	local leader = player;
+	if (param && param != "") {
+		local foundLeader = null;
+		foreach (surv in ::Left4Bots.Survivors) {
+			if (surv.GetPlayerName().tolower().find(param.tolower()) != null) {
+				foundLeader = surv;
+				break;
+			}
+		}
+		if (foundLeader) leader = foundLeader;
+		else {
+			ClientPrint(player, 3, "\x04[L4B]\x01 Snake Leader '" + param + "' not found.");
+			return;
+		}
+	}
+	
+	local leaderId = leader.GetPlayerUserId();
+	if (!(leaderId in ::Left4Bots.SnakeTrains)) ::Left4Bots.SnakeTrains[leaderId] <- [];
+
+	// 2. Add the bot(s) to the Train
+	local function AddToSnake(bot) {
+		if (bot == leader) return; // Cannot follow yourself
+		bot.GetScriptScope().BotCancelAll();
+		
+		if (::Left4Bots.SnakeTrains[leaderId].find(bot) == null) {
+			::Left4Bots.SnakeTrains[leaderId].append(bot);
+		}
+		// false = do not pause for tanks/witches
+		BotOrderAdd(bot, "snake_in", player, null, null, null, 0.0, false);
+		ClientPrint(player, 3, "\x04[L4B]\x01 " + bot.GetPlayerName() + " joined snake behind " + leader.GetPlayerName());
+	}
+
+	if (allBots) {
+		::Left4Bots.SnakeTrains[leaderId].clear();
+		foreach (bot in Bots) AddToSnake(bot);
+	} else {
+		if (!tgtBot) tgtBot = GetPickerBot(player);
+		if (tgtBot) AddToSnake(tgtBot);
+		else ClientPrint(player, 3, "\x04[L4B]\x01 No available bot for snake_in.");
+	}
+}
+
+::Left4Bots.CmdHelp_snake_in <- function ()
+{
+	return PRINTCOLOR_NORMAL + "<" + PRINTCOLOR_CYAN + "botsource" + PRINTCOLOR_NORMAL + "> " + PRINTCOLOR_GREEN + "snake_in [target]" + PRINTCOLOR_NORMAL + "\n"
+		 + PRINTCOLOR_NORMAL + "Forms a strict line. If [target] is specified, they form behind that survivor instead of you.\n";
+}
+
+::Left4Bots.Cmd_snake_out <- function (player, allBots = false, tgtBot = null, param = null)
+{
+	if (allBots) {
+		::Left4Bots.SnakeTrains.clear(); // Nuke all trains
+		foreach (bot in Bots) {
+			bot.GetScriptScope().BotCancelOrders("snake_in");
+			// Unforce the walk button just in case
+			NetProps.SetPropInt(bot, "m_afButtonForced", NetProps.GetPropInt(bot, "m_afButtonForced") & ~131072);
+		}
+		ClientPrint(player, 3, "\x04[L4B]\x01 All bots leaving snake formation.");
+	} else {
+		if (!tgtBot) tgtBot = GetPickerBot(player);
+		if (tgtBot) {
+			::Left4Bots.RemoveFromSnakeFormation(tgtBot);
+			tgtBot.GetScriptScope().BotCancelOrders("snake_in");
+			NetProps.SetPropInt(tgtBot, "m_afButtonForced", NetProps.GetPropInt(tgtBot, "m_afButtonForced") & ~131072);
+			ClientPrint(player, 3, "\x04[L4B]\x01 " + tgtBot.GetPlayerName() + " leaving snake formation.");
+		}
+	}
+}
+
+::Left4Bots.CmdHelp_snake_out <- function ()
+{
+	return PRINTCOLOR_NORMAL + "<" + PRINTCOLOR_CYAN + "botsource" + PRINTCOLOR_NORMAL + "> " + PRINTCOLOR_GREEN + "snake_out" + PRINTCOLOR_NORMAL + "\n"
+		 + PRINTCOLOR_NORMAL + "Removes bot(s) from the snake formation and repairs the line.\n";
 }
 
 ::Left4Bots.Cmd_come <- function (player, allBots = false, tgtBot = null, param = null)
@@ -1244,19 +1553,12 @@ Msg("Including left4bots_commands...\n");
 	Logger.Debug("Cmd_wait - player: " + player.GetPlayerName() + " - allBots: " + allBots + " - tgtBot: " + tgtBot + " - param: " + param);
 	
 	local waitPos = null;
-	local waitSurv = null;
 	if (param)
 	{
 		if (param.tolower() == "here")
 			waitPos = player.GetOrigin();
 		else if (param.tolower() == "there")
 			waitPos = Left4Utils.GetLookingPosition(player, Settings.tracemask_others);
-		else
-			waitSurv = GetBotByName(param);
-			if (waitSurv)
-			{
-				waitPos = waitSurv.GetOrigin();
-			}
 
 		if (!waitPos)
 		{
@@ -1296,7 +1598,6 @@ Msg("Including left4bots_commands...\n");
 	Logger.Debug("Cmd_warp - player: " + player.GetPlayerName() + " - allBots: " + allBots + " - tgtBot: " + tgtBot + " - param: " + param);
 	
 	local warpPos = null;
-	local warpSurv = null;
 	if (param)
 	{
 		if (param.tolower() == "here") //lxc fix "warp" pos
@@ -1305,12 +1606,6 @@ Msg("Including left4bots_commands...\n");
 			warpPos = Left4Utils.GetLookingPosition(player, Settings.tracemask_others);
 		else if (param.tolower() == "move")
 			warpPos = "move";
-		else
-			warpSurv = GetBotByName(param);
-			if (warpSurv)
-			{
-				warpPos = warpSurv.IsHangingFromLedge() ? NetProps.GetPropVector(warpSurv, "m_hangStandPos") : warpSurv.GetOrigin();
-			}
 
 		if (!warpPos)
 		{
@@ -1400,5 +1695,108 @@ Msg("Including left4bots_commands...\n");
 		 + PRINTCOLOR_NORMAL + "The order is added to the given bot(s) orders queue.\n"
 		 + PRINTCOLOR_NORMAL + "The bot(s) will try to kill the witch you are looking at.";
 }
+
+::Left4Bots.Cmd_pace_with_me <- function (player, allBots = false, tgtBot = null, param = null)
+{
+	local leader = player;
+	local requestedIndex = 0;
+
+	// 1. Determine if param is a slot number or a name
+	if (param != null && param != "") {
+		try {
+			requestedIndex = param.tointeger();
+		} catch (e) {
+			requestedIndex = 0; // It's a name, not a number
+		}
+	}
+
+	// 2. If it's a name, find that specific leader
+	if (param && requestedIndex == 0) {
+		local foundLeader = null;
+		local pLower = param.tolower();
+		foreach (surv in ::Left4Bots.Survivors) {
+			if (surv.GetPlayerName().tolower().find(pLower) != null) {
+				foundLeader = surv; break;
+			}
+		}
+		if (foundLeader) leader = foundLeader;
+		else { 
+			ClientPrint(player, 3, "\x04[L4B]\x01 Leader '" + param + "' not found."); 
+			return; 
+		}
+	}
+	
+	local function AddToPace(bot, index) {
+		if (bot == leader) return; 
+		local scope = bot.GetScriptScope();
+		bot.GetScriptScope().BotCancelAll();
+		
+		scope.PaceWithMeTarget = leader;
+
+		// 3. Logic to find an unoccupied index if one wasn't requested
+		if (index == 0) {
+			local taken = [];
+			foreach (b in ::Left4Bots.Bots) {
+				if (b.IsValid()) {
+					local s = b.GetScriptScope();
+					if ("SquadIndex" in s && s.SquadIndex != 0) taken.append(s.SquadIndex);
+				}
+			}
+			for (local i = 1; i <= 8; i++) {
+				local alreadyUsed = false;
+				foreach(val in taken) { if (val == i) alreadyUsed = true; }
+				if (!alreadyUsed) { index = i; break; }
+			}
+		}
+		scope.SquadIndex = index;
+
+		BotOrderAdd(bot, "pace_with_me", player, null, null, null, 0.0, true);
+		ClientPrint(player, 3, "\x04[L4B]\x01 " + bot.GetPlayerName() + " pacing " + leader.GetPlayerName() + " in Slot [" + index + "]");
+	}
+
+	if (allBots) {
+		local autoIdx = 1;
+		foreach (bot in Bots) { AddToPace(bot, autoIdx); autoIdx++; }
+	} else {
+		if (!tgtBot) tgtBot = GetPickerBot(player);
+		if (tgtBot) AddToPace(tgtBot, requestedIndex);
+		else ClientPrint(player, 3, "\x04[L4B]\x01 No available bot for pace_with_me.");
+	}
+}
+
+::Left4Bots.CmdHelp_pace_with_me <- function ()
+{
+	return PRINTCOLOR_NORMAL + "<" + PRINTCOLOR_CYAN + "botsource" + PRINTCOLOR_NORMAL + "> " + PRINTCOLOR_GREEN + "pace_with_me [target]" + PRINTCOLOR_NORMAL + "\n"
+		 + PRINTCOLOR_NORMAL + "Bots will instantly match your walk/run speed and stop when you stop.\n";
+}
+
+::Left4Bots.Cmd_pace_stop <- function (player, allBots = false, tgtBot = null, param = null)
+{
+	local function StopPacing(bot) {
+		if (bot) {
+			// CLEAR THE MEMORY FLAG!
+			bot.GetScriptScope().PaceWithMeTarget = null;
+			bot.GetScriptScope().BotCancelOrders("pace_with_me");
+			// Explicitly release the walk key to prevent getting stuck
+			NetProps.SetPropInt(bot, "m_afButtonForced", NetProps.GetPropInt(bot, "m_afButtonForced") & ~131072);
+		}
+	}
+
+	if (allBots) {
+		foreach (bot in Bots) StopPacing(bot);
+		ClientPrint(player, 3, "\x04[L4B]\x01 All bots stopped pacing.");
+	} else {
+		if (!tgtBot) tgtBot = GetPickerBot(player);
+		StopPacing(tgtBot);
+		if (tgtBot) ClientPrint(player, 3, "\x04[L4B]\x01 " + tgtBot.GetPlayerName() + " stopped pacing.");
+	}
+}
+
+::Left4Bots.CmdHelp_pace_stop <- function ()
+{
+	return PRINTCOLOR_NORMAL + "<" + PRINTCOLOR_CYAN + "botsource" + PRINTCOLOR_NORMAL + "> " + PRINTCOLOR_GREEN + "pace_stop" + PRINTCOLOR_NORMAL + "\n"
+		 + PRINTCOLOR_NORMAL + "Cancels the pacing order.\n";
+}
+
 
 //

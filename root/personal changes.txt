@@ -1,0 +1,33 @@
+2026-03-15
+
+added command: carry_always
+
+this makes it so that after 3 seconds, the bot will pick up the gnome or cola again. whatever prop you told the bot to pick up.
+useful for Suicide Blitz runs where the bot drops the prop and then picks it back again once it's safe.
+
+additional changes: made angry mob range from 250 to 600 units
+
+made it so to remember picking up by model not by ID so if the gnome is destroyed and recreated, the bot will pick up any gnome.
+
+2026-03-16
+added command "checkmemory" to check which model is stored in carry_always
+useful to know if a bot is set to always carry a gnome or something.
+//scripted_user_func l4b,ellis,carry_always (makes the bot always pick up the prop if dropped once safe)
+//!l4b bots checkmemory or scripted_user_func l4b,bots,checkmemory
+- turned carry_always to also accept parameters from this key table:
+CarryableItemMap = 
+	{
+		["gnome"] = "models/props_junk/gnome.mdl",
+		["cola"] = "models/w_models/weapons/w_cola.mdl",
+		["cola_bottles"] = "models/w_models/weapons/w_cola.mdl",
+		["gascan"] = "models/props_junk/gascan001a.mdl",
+		["propanetank"] = "models/props_explosive/propane_tank.mdl",
+		["propane_tank"] = "models/props_explosive/propane_tank.mdl",
+		["fireworkscrate"] = "models/props_explosive/fireworks_crate.mdl",
+		["fireworks_crate"] = "models/props_explosive/fireworks_crate.mdl",
+		["oxygentank"] = "models/props_equipment/oxygentank01.mdl",
+		["oxygen_tank"] = "models/props_equipment/oxygentank01.mdl",
+	}
+scripted_user_func l4b,ellis,carry_always,gnome (can now specify which prop to always carry, and also point functionality still works)
+
+- changed how it works so it can carry the props in buggy mutations like Last Gnome on Earth, scanning by model and taking into account any and all prop physics.

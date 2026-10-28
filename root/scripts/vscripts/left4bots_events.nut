@@ -1138,6 +1138,11 @@ Msg("Including left4bots_events...\n");
 
 	if (IsValidSurvivor(player))
 	{
+		// Ensure scope and trail exist for everyone
+		player.ValidateScriptScope();
+		local s = player.GetScriptScope();
+		if (!("SnakeTrail" in s)) s.SnakeTrail <- [];
+		
 		Survivors[userid] <- player;
 		SurvivorFlow[userid] <- { isBot = false, inCheckpoint = IsSurvivorInCheckpoint(player), flow = GetCurrentFlowDistanceForPlayer(player) };
 
@@ -1155,6 +1160,7 @@ Msg("Including left4bots_events...\n");
 					task._ordersSent = false;
 			}
 		}
+		
 		else if (Settings.play_sounds)
 		{
 			// Precache sounds for human players
@@ -1721,6 +1727,37 @@ Msg("Including left4bots_events...\n");
 // Does various stuff
 ::Left4Bots.OnThinker <- function (params)
 {
+	// --- GLOBAL BREADCRUMB RECORDING (SAFE VERSION) ---
+	foreach (id, surv in Survivors)
+	{
+		// 1. Check if entity is valid and a player
+		if (surv != null && surv.IsValid() && surv.IsPlayer())
+		{
+			try {
+				// 2. Safely ensure scope exists
+				surv.ValidateScriptScope();
+				local scope = surv.GetScriptScope();
+				
+				// 3. Initialize trail if missing
+				if (!("SnakeTrail" in scope)) scope.SnakeTrail <- [];
+				
+				// 4. Record if alive
+				if (!surv.IsDead() && !surv.IsIncapacitated())
+				{
+					local trail = scope.SnakeTrail;
+					local currentPos = surv.GetOrigin();
+
+					if (trail.len() == 0 || (currentPos - trail[0]).Length() > 10)
+					{
+						trail.insert(0, currentPos);
+						if (trail.len() > 100) trail.pop();
+					}
+				}
+			} catch (e) {
+				// Ignore errors for this specific player to prevent mod crash
+			}
+		}
+	}
 	// Listen for human survivors BUTTON_SHOVE press
 	foreach (surv in Survivors)
 	{

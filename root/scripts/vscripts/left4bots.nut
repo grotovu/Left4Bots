@@ -41,18 +41,35 @@ IncludeScript("left4bots_requirements");
 	SurvivorSet = 2
 	OrderPriorities = // Orders and their priorities (orders with lower priority are shifted back in the queue when orders with higher priority are added)
 	{
-		carry = 0
-		follow = 0
-		lead = 0
-		scavenge = 0 // TODO: maybe this should be 1 and all the next should be increased by 1 while scavenge, follow and lead should remain to 0 and must be made exlusive (only 1 of them at a time: replace any previous with the last added)
-		goto = 1
-		wait = 1
-		deploy = 2
-		tempheal = 2
-		heal = 2
-		use = 2
-		destroy = 2
-		witch = 3
+		carry = 0,
+		carry_always = 0,
+		follow = 0,
+		lead = 0,
+		pace_with_me = 0,		
+		scavenge = 0,
+		goto = 1,
+		wait = 1,
+		deploy = 2,
+		tempheal = 2,
+		heal = 2,
+		use = 2,
+		destroy = 2,
+		witch = 3,
+		snake_in = 4,
+	}
+	// Maps user-friendly names to the model paths for the carry_always command
+	CarryableItemMap = 
+	{
+		["gnome"] = "gnome.mdl",
+		["cola"] = "cola.mdl",
+		["cola_bottles"] = "cola.mdl",
+		["gascan"] = "gascan001a.mdl",
+		["propanetank"] = "propane_tank.mdl",
+		["propane_tank"] = "propane_tank.mdl",
+		["fireworkscrate"] = "fireworks_crate.mdl",
+		["fireworks_crate"] = "fireworks_crate.mdl",
+		["oxygentank"] = "oxygentank01.mdl",
+		["oxygen_tank"] = "oxygentank01.mdl",
 	}
 
 	Events = {}
@@ -110,6 +127,8 @@ IncludeScript("left4bots_requirements");
 	OnTankCvars = {}
 	OnTankCvarsBak = {}
 	AIFuncs = {}
+	SnakeTrains = {}
+	PaceTrains = {}
 	
 	//lxc check infected's status, is there a better way?
 	InfectedCalmAct =
@@ -3724,14 +3743,16 @@ Support vanilla weapon preference.
 ::Left4Bots.EnforcePrimaryWeapon <- function(bot, ActiveWeapon)
 {
 	local canSwitch = true;
-	if ((Settings.enforce_shotgun || Settings.enforce_sniper_rifle) && ActiveWeapon && !bot.IsIncapacitated())
+	// ADDED: rifle and smg settings to the check
+	if ((Settings.enforce_shotgun || Settings.enforce_sniper_rifle || Settings.enforce_rifle || Settings.enforce_smg) && ActiveWeapon && !bot.IsIncapacitated())
 	{
 		local wp = Left4Utils.GetInventoryItemInSlot(bot, INV_SLOT_PRIMARY);
 		local wp2nd = Left4Utils.GetInventoryItemInSlot(bot, INV_SLOT_SECONDARY);
 		if (wp && wp2nd && Left4Utils.GetAmmoPercent(wp) > 0)
 		{
 			local type = Left4Utils.GetWeaponTypeById(Left4Utils.GetWeaponId(wp));
-			if (type == "shotgun" || type == "sniper_rifle")
+			// ADDED: rifle and smg to the type check
+			if (type == "shotgun" || type == "sniper_rifle" || type == "rifle" || type == "smg")
 			{
 				local type2nd = Left4Utils.GetWeaponTypeById(Left4Utils.GetWeaponId(wp2nd));
 				local flag = type2nd == "pistol" ? (wp2nd.GetClassname() == "weapon_pistol_magnum" ? 2 : 1) : 
@@ -3748,8 +3769,6 @@ Support vanilla weapon preference.
 					{
 						NetProps.SetPropEntity(wp2nd, "m_hOwner", bot);
 						bot.SwitchToItem(wp.GetClassname());
-						
-						//if can not switch to primary weapon, at least we still have one, also fixed chainsaw smoking when pickup and switch at the same time
 						return;
 					}
 				}
