@@ -1,70 +1,100 @@
-# Left 4 Bots 2
-This is a complete rework of [Left 4 Bots (v1)](https://github.com/smilz0/Left4Bots/tree/V1). It has pretty much the same functionalities of the V1 but they have been improved, plus some new functionalities have been added.
+# Left 4 Bots 2 (Pace and Carry Fork)
 
-***Please note: the goal of Left 4 Bots has always been to make the survivor bots more human-like, not to turn them into super zombie killing machines.***
+This is a fork of [smilz0's Left 4 Bots 2](https://github.com/smilz0/Left4Bots). 
 
-The addon gives them some functions that the vanilla AI was missing, like defib dead players, scavenge gascans, deadstop special intefected etc, so their combat capabilities are also improved but they can also fail and fu** things up, sometimes. But isn't this part of the human behavior? :stuck_out_tongue:
+While preserving the core human-like behavior and automation of L4B2, this fork introduces **squad pacing**, **single-file snake formations**, **persistent item carrying (`carry_always`)**, and **expanded primary weapon enforcement (Rifles & SMGs)**.
 
-Despite the use of the term **AI** there is no real AI/machine learning algorithm, it's just a bunch of `if then else`, so do not expect them to start learning and eventually become self-conscious and do things on their own acting perfectly in every situation.
+---
 
+## 🌟 New Features in This Fork
 
-### What changed?
-Almost everything. The bots are more active while executing the orders, they can attack and shove infected and scavenge items. The **lead** order has been completely reworked and it will work on most maps, including finales. Now you can order each bot to follow another survivor or to go and hold a certain position. Bots have weapon preferences you can change. And more.
+### 1. 🚶 Squad Pacing (`pace_with_me` & `pace_stop`)
+* **Speed Mirroring:** Bots automatically match your exact speed. When you walk (`+speed`), the bots walk alongside you. When you stop, they stop. When you sprint, they break formation and revert to native pathing to keep up.
+* **Squad Formations:** Bots arrange themselves into dynamic tactical slots around you (Front-Left, Front-Right, Flanks, Rear).
+* **Natural Drift:** Bots periodically shift their spacing subtly so they look and feel like human teammates rather than rigid statues.
+* **Combat Intelligence:** If a Tank spawns, a teammate is incapacitated, or an intense fight breaks out, pacing automatically pauses so bots can defend themselves and revive allies freely.
 
-For more details, please check the videos i made about L4B2 on my [Youtube Channel](https://www.youtube.com/channel/UCS5k0e5UJr_GklgCd1j89Yg).
+### 2. 🐍 Single-File Conga Line (`snake_in` & `snake_out`)
+* **Breadcrumb Navigation:** Bots record and follow a trail of footprints left by the leader, forming a single-file line behind you.
+* **Lag Compensation & Velocity Matching:** Prevents the choppy, stuttering movement typical of custom VScript pathing by injecting velocity frames to match the leader smoothly.
+* Perfect for navigating narrow catwalks, tight hallways, or avoiding hazards.
 
+### 3. 📦 Persistent Item Carrier (`carry_always`)
+In vanilla L4B2, dropping a carried item during combat often cancels the order.
+* **Permanent Assignment:** Assign a bot to be the permanent carrier of a specific object (Gnome, Cola, Gascan, Fireworks, Propane Tank, or Oxygen Tank).
+* **Combat Drop & Auto-Recovery:** When attacked, the bot will drop the item to fight. Once the danger has passed (`carry_always_safe_time`), the bot will automatically search for the item and pick it back up without needing a new command!
 
-### Addon settings
-The list of L4B2 settings can be found [HERE](https://github.com/smilz0/Left4Bots/blob/main/root/scripts/vscripts/left4bots_settings.nut).
+### 4. 🔫 Rifle & SMG Weapon Enforcement
+* Vanilla L4B2 includes settings to force bots to stay on Shotguns or Sniper Rifles (`enforce_shotgun`, `enforce_sniper_rifle`).
+* This fork expands enforcement to **Assault Rifles (`enforce_rifle`)** and **SMGs (`enforce_smg`)**, preventing bots from unnecessarily swapping away from their primaries to weak sidearms.
 
-You can change the settings by editing the file `ems/left4bots2/cfg/settings.txt` or directly ingame with the following commands:
-- Via chat: `!l4b settings [setting] [value]`
-- Via console: `scripted_user_func l4b,settings,[setting],[value]`
+---
 
+## 🕹️ New Chat & Console Commands
 
-### Addon commands
-The list of L4B2 commands can be found [HERE](https://github.com/smilz0/Left4Bots/blob/main/COMMANDS.md) and can be seen [HERE](https://www.youtube.com/playlist?list=PLFEEMMIutAbsDQHsp6sMLiAo2l5682lqi).
+Use these via in-game chat using `!l4b <botsource> <command> [args]` (or in console via `scripted_user_func l4b,...`):
 
+| Command | Example | Description |
+| :--- | :--- | :--- |
+| `pace_with_me` | `!l4b bots pace_with_me` | Orders bots to pace with you. You can optionally specify a slot number (1–4) or another survivor's name. |
+| `pace_stop` | `!l4b bots pace_stop` | Cancels pacing mode and restores normal bot AI behavior. |
+| `snake_in` | `!l4b bots snake_in` | Forms a single-file line behind you (or behind a specified target). |
+| `snake_out` | `!l4b bots snake_out` | Disbands the snake formation and returns bots to normal movement. |
+| `carry_always` | `!l4b ellis carry_always gnome` | Assigns a bot to permanently carry an item type (`gnome`, `cola`, `gascan`, `propane_tank`, `fireworkscrate`, `oxygentank`), or the item you are looking at. |
+| `checkmemory` | `!l4b ellis checkmemory` | Debug command: displays what item model the bot is currently assigned to carry. |
+| `cancel carry_always` | `!l4b ellis cancel carry_always` | Clears the persistent carry memory and drops the item. |
 
-### Want to customize the addon even further
-and you know a bit about VScript?
+---
 
-Create a file named `left4bots_afterload.nut` and one named `left4bots_afterinit.nut` into the `script/vscript` directory and put only the L4B2 code you want to change in there.
+## ⚙️ New Settings Configuration
 
-`left4bots_afterload.nut` is automatically called by **L4B2** right after its .nut files are loaded and before the L4B2 settings are loaded and the addon fully initialized.
+The following new options can be configured in `left4bots_settings.nut` or via `!l4b settings [setting] [value]`:
 
-Here you can put the L4B2 functions you want to modify so your modified version will overwrite the base one.
-
-For example if you want to change the logic to decide whether the bot is about to use meds, you simply add this function to the file with your own changes:
-
+### Weapon Enforcement
 ```nut
-::Left4Bots.BotWillUseMeds <- function (bot)
-{
-	local totalHealth = bot.GetHealth() + bot.GetHealthBuffer();
-	if (totalHealth >= 55) // <- look, i changed 45 to 55 because for me it's better
-		return false;
-	
-	(...)
-}
+// [0 - 15] Bitflag: Prevent bots from switching away from Rifles to secondary.
+// 15 = All secondaries blocked (pistol + magnum + melee + chainsaw), 0 = Vanilla behavior.
+enforce_rifle = 15
+
+// [0 - 15] Bitflag: Prevent bots from switching away from SMGs to secondary.
+enforce_smg = 15
 ```
 
-`left4bots_afterload.nut` is also called before the VScript `__CollectEventCallbacks`, so you can even alter the events here, like:
-
+### Squad Pacing Offsets & Spacing
 ```nut
-::Left4Bots.Events.OnGameEvent_round_start <- function (params)
+// Side and Back offsets for squad formation slots (relative to leader)
+pace_slot1_side = 50       // Slot 1 (Front Right)
+pace_slot1_back = -120
+
+pace_slot2_side = -60      // Slot 2 (Behind Left)
+pace_slot2_back = -20
+
+pace_slot3_side = -50      // Slot 3 (Front Left)
+pace_slot3_back = -100
+
+pace_slot4_side = 50       // Slot 4 (Behind Right)
+pace_slot4_back = -20
+
+// Scale range for dynamic positioning drift (0.2 = keeps bots at least 20% separated)
+pace_drift_min_scale = 0.2
+pace_drift_max_scale = 1.0
+
+// Time interval (in seconds) between selecting new drift positions
+pace_drift_min_time = 3.0
+pace_drift_max_time = 6.0
 ```
 
-and you can alter the [Left 4 Lib](https://github.com/smilz0/Left4Lib) functions as well, if you need to.
-
-`left4bots_afterinit.nut` is called after the addon loaded the settings and finished its initialization. Here, for example, you can force your values to the addon settings:
-
+### Snake Formation & Teleport Settings
 ```nut
-Left4Bots.Settings.handle_l4d1_survivors = 1;
-// ... or do whatever you want to do after the addon initialization
+// Distance (in units) the bot will stay behind the target ahead of it
+snake_formation_distance = 50
+
+// Max distance before the bot teleports to catch up if stuck/lagged behind
+snake_formation_teleport_distance = 100
 ```
 
-You aren't forced to add both the .nut files, only the one you use.
+---
 
-Now, if you want, you can pack your .nut files and upload your addon to the workshop adding both **Left 4 Bots 2** and **Left 4 Lib** as required addons.
-
-This is better than duplicating the L4B2 files into your addon because this way you aren't creating conflicting addons, the end user will be able to switch between normal L4B2 and your version simply by enabling/disabling your addon in the addon list and (potentially) you won't need to update your addon every time i update mine.
+## 📜 Credits
+* **[smilz0](https://github.com/smilz0/Left4Bots)** - Original creator of Left 4 Bots 2.
+* **[EagleRaviOrange](https://github.com/grotovu/Left4Bots)** - Fork author: Squad pacing, dynamic drift formation, breadcrumb snake formation, `carry_always` logic, and Rifle/SMG weapon enforcement.
