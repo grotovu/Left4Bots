@@ -16,13 +16,11 @@ While preserving the core human-like behavior and automation of L4B2, this fork 
 
 ### 2. 🐍 Single-File Conga Line (`snake_in` & `snake_out`)
 * **Breadcrumb Navigation:** Bots record and follow a trail of footprints left by the leader, forming a single-file line behind you.
-* **Lag Compensation & Velocity Matching:** Prevents the choppy, stuttering movement typical of custom VScript pathing by injecting velocity frames to match the leader smoothly.
-* Perfect for navigating narrow catwalks, tight hallways, or avoiding hazards.
 
 ### 3. 📦 Persistent Item Carrier (`carry_always`)
 In vanilla L4B2, dropping a carried item during combat often cancels the order.
 * **Permanent Assignment:** Assign a bot to be the permanent carrier of a specific object (Gnome, Cola, Gascan, Fireworks, Propane Tank, or Oxygen Tank).
-* **Combat Drop & Auto-Recovery:** When attacked, the bot will drop the item to fight. Once the danger has passed (`carry_always_safe_time`), the bot will automatically search for the item and pick it back up without needing a new command!
+* **Combat Drop & Auto-Recovery:** When attacked, the bot will drop the item to fight. Once the danger has passed (`carry_always_safe_time`), the bot will automatically search for the item and pick it back up without needing a new command.
 
 ### 4. 🔫 Rifle & SMG Weapon Enforcement
 * Vanilla L4B2 includes settings to force bots to stay on Shotguns or Sniper Rifles (`enforce_shotgun`, `enforce_sniper_rifle`).
