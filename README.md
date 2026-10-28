@@ -14,8 +14,9 @@ While preserving the core human-like behavior and automation of L4B2, this fork 
 * **Natural Drift:** Bots periodically shift their spacing subtly so they look and feel like human teammates rather than rigid statues.
 * **Combat Intelligence:** If a Tank spawns, a teammate is incapacitated, or an intense fight breaks out, pacing automatically pauses so bots can defend themselves and revive allies freely.
 
-### 2. 🐍 Single-File Conga Line (`snake_in` & `snake_out`)
+### 2. 🐍 Single-File Conga Line (`snake_in` & `snake_out`) - WIP
 * **Breadcrumb Navigation:** Bots record and follow a trail of footprints left by the leader, forming a single-file line behind you.
+* WIP. Bots warp to maintain formation.
 
 ### 3. 📦 Persistent Item Carrier (`carry_always`)
 In vanilla L4B2, dropping a carried item during combat often cancels the order.
