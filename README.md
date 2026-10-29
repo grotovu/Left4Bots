@@ -13,6 +13,10 @@ While preserving the core human-like behavior and automation of L4B2, this fork 
 * **Squad Formations:** Bots arrange themselves into dynamic tactical slots around you (Front-Left, Front-Right, Flanks, Rear).
 * **Natural Drift:** Bots periodically shift their spacing subtly so they look and feel like human teammates rather than rigid statues.
 * **Combat Intelligence:** If a Tank spawns, a teammate is incapacitated, or an intense fight breaks out, pacing automatically pauses so bots can defend themselves and revive allies freely.
+* **Example Clips of pace_with_me:**
+  * https://www.youtube.com/watch?v=XNUcoy9Zy5Y
+  * https://www.youtube.com/watch?v=qChzhKMhx1A
+  * https://www.youtube.com/watch?v=Ae1y5r0BpUQ
 
 ### 2. 🐍 Single-File Conga Line (`snake_in` & `snake_out`) - WIP
 * **Breadcrumb Navigation:** Bots record and follow a trail of footprints left by the leader, forming a single-file line behind you.
